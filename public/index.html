@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Auth Demo</title>
+    <style>
+      body { font-family: system-ui, Arial, sans-serif; margin: 2rem; }
+      .card { max-width: 420px; padding: 1rem; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1rem; }
+      label { display:block; margin-top: .5rem; }
+      input { width:100%; padding:.5rem; margin-top:.25rem; }
+      button { margin-top: .75rem; padding:.5rem .75rem; }
+      pre { background:#f6f8fa; padding:.75rem; border-radius:6px; overflow:auto; }
+    </style>
+  </head>
+  <body>
+    <h1>Register / Login</h1>
+
+    <div class="card">
+      <h2>Register</h2>
+      <label>Username<input id="reg-username" /></label>
+      <label>Password<input id="reg-password" type="password" /></label>
+      <button id="btn-register">Register</button>
+      <pre id="reg-result"></pre>
+    </div>
+
+    <div class="card">
+      <h2>Login</h2>
+      <label>Username<input id="login-username" /></label>
+      <label>Password<input id="login-password" type="password" /></label>
+      <button id="btn-login">Login</button>
+      <pre id="login-result"></pre>
+    </div>
+
+    <script>
+      const api = (path, body) => fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json());
+
+      document.getElementById('btn-register').onclick = async () => {
+        const username = document.getElementById('reg-username').value;
+        const password = document.getElementById('reg-password').value;
+        const res = await api('/api/auth/register', { username, password });
+        document.getElementById('reg-result').textContent = JSON.stringify(res, null, 2);
+      };
+
+      document.getElementById('btn-login').onclick = async () => {
+        const username = document.getElementById('login-username').value;
+        const password = document.getElementById('login-password').value;
+        const res = await api('/api/auth/login', { username, password });
+        document.getElementById('login-result').textContent = JSON.stringify(res, null, 2);
+        if (res.token) localStorage.setItem('token', res.token);
+      };
+    </script>
+  </body>
+</html>
