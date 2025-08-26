@@ -6,49 +6,177 @@
     <title>Auth Demo</title>
     <style>
       body { font-family: system-ui, Arial, sans-serif; margin: 2rem; }
-      .card { max-width: 420px; padding: 1rem; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1rem; }
+      .card { max-width: 500px; padding: 1rem; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1rem; }
       label { display:block; margin-top: .5rem; }
       input { width:100%; padding:.5rem; margin-top:.25rem; }
       button { margin-top: .75rem; padding:.5rem .75rem; }
       pre { background:#f6f8fa; padding:.75rem; border-radius:6px; overflow:auto; }
+      .row { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
+      .muted { color:#666; font-size:.9rem; }
+      .ok { color: #0a7; }
+      .err { color: #c00; }
     </style>
   </head>
   <body>
     <h1>Register / Login</h1>
 
+    <!-- Register -->
     <div class="card">
       <h2>Register</h2>
-      <label>Username<input id="reg-username" /></label>
-      <label>Password<input id="reg-password" type="password" /></label>
-      <button id="btn-register">Register</button>
+      <label>Username<input id="reg-username" required /></label>
+      <label>Email<input id="reg-email" type="email" required /></label>
+      <label>Phone Number<input id="reg-phone" type="tel" /></label>
+      <label>Password<input id="reg-password" type="password" minlength="4" required /></label>
+      <label>First Name<input id="reg-first" /></label>
+      <label>Last Name<input id="reg-last" /></label>
+      <label>Date of Birth<input id="reg-dob" type="date" /></label>
+
+      <div class="row">
+        <button id="btn-register">Register</button>
+        <span id="reg-status" class="muted"></span>
+      </div>
       <pre id="reg-result"></pre>
     </div>
 
+    <!-- Login -->
     <div class="card">
       <h2>Login</h2>
-      <label>Username<input id="login-username" /></label>
-      <label>Password<input id="login-password" type="password" /></label>
-      <button id="btn-login">Login</button>
+      <label>Email<input id="login-email" type="email" required /></label>
+      <label>Password<input id="login-password" type="password" minlength="4" required /></label>
+      <div class="row">
+        <button id="btn-login">Login</button>
+        <button id="btn-logout" type="button">Logout</button>
+        <span id="login-status" class="muted"></span>
+      </div>
       <pre id="login-result"></pre>
     </div>
 
+    <!-- Token -->
+    <div class="card">
+      <h2>Stored Token</h2>
+      <div class="row">
+        <button id="btn-copy" type="button">Copy</button>
+        <span class="muted">Saved to localStorage after login</span>
+      </div>
+      <pre id="token-box"></pre>
+    </div>
+
     <script>
-      const api = (path, body) => fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json());
+      const $ = (id) => document.getElementById(id);
 
-      document.getElementById('btn-register').onclick = async () => {
-        const username = document.getElementById('reg-username').value;
-        const password = document.getElementById('reg-password').value;
-        const res = await api('/api/auth/register', { username, password });
-        document.getElementById('reg-result').textContent = JSON.stringify(res, null, 2);
+      const showToken = () => {
+        const token = localStorage.getItem('token') || '';
+        $('token-box').textContent = token ? token : '(no token)';
       };
 
-      document.getElementById('btn-login').onclick = async () => {
-        const username = document.getElementById('login-username').value;
-        const password = document.getElementById('login-password').value;
-        const res = await api('/api/auth/login', { username, password });
-        document.getElementById('login-result').textContent = JSON.stringify(res, null, 2);
-        if (res.token) localStorage.setItem('token', res.token);
+      const setBusy = (el, busy) => {
+        el.disabled = !!busy;
+        el.textContent = busy ? (el.dataset.busyText || 'Working...') : (el.dataset.idleText || el.textContent);
       };
+
+      const api = async (path, body) => {
+        const res = await fetch(path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const message = data && data.message ? data.message : `HTTP ${res.status}`;
+          throw new Error(message);
+        }
+        return data;
+      };
+
+      $('btn-register').dataset.idleText = 'Register';
+      $('btn-register').dataset.busyText = 'Registering...';
+      $('btn-login').dataset.idleText = 'Login';
+      $('btn-login').dataset.busyText = 'Logging in...';
+
+      // Register
+      $('btn-register').onclick = async () => {
+        const body = {
+          username: $('reg-username').value.trim(),
+          email: $('reg-email').value.trim(),
+          phone_number: $('reg-phone').value.trim(),
+          password: $('reg-password').value,
+          first_name: $('reg-first').value.trim(),
+          last_name: $('reg-last').value.trim(),
+          date_of_birth: $('reg-dob').value
+        };
+
+        $('reg-status').className = 'muted';
+        $('reg-status').textContent = '';
+        $('reg-result').textContent = '';
+
+        if (!body.username || !body.email || !body.password) {
+          $('reg-status').className = 'err';
+          $('reg-status').textContent = 'Username, Email, and Password are required';
+          return;
+        }
+
+        setBusy($('btn-register'), true);
+        try {
+          const res = await api('/api/auth/register', body);
+          $('reg-status').className = 'ok';
+          $('reg-status').textContent = 'Registered successfully';
+          $('reg-result').textContent = JSON.stringify(res, null, 2);
+        } catch (e) {
+          $('reg-status').className = 'err';
+          $('reg-status').textContent = e.message || 'Registration failed';
+        } finally {
+          setBusy($('btn-register'), false);
+        }
+      };
+
+      // Login with email + password
+      $('btn-login').onclick = async () => {
+        const email = $('login-email').value.trim();
+        const password = $('login-password').value;
+
+        $('login-status').className = 'muted';
+        $('login-status').textContent = '';
+        $('login-result').textContent = '';
+
+        if (!email || !password) {
+          $('login-status').className = 'err';
+          $('login-status').textContent = 'Email and password are required';
+          return;
+        }
+
+        setBusy($('btn-login'), true);
+        try {
+          const res = await api('/api/auth/login', { email, password });
+          $('login-status').className = 'ok';
+          $('login-status').textContent = 'Logged in';
+          $('login-result').textContent = JSON.stringify(res, null, 2);
+          if (res.token) localStorage.setItem('token', res.token);
+          showToken();
+        } catch (e) {
+          $('login-status').className = 'err';
+          $('login-status').textContent = e.message || 'Login failed';
+        } finally {
+          setBusy($('btn-login'), false);
+        }
+      };
+
+      $('btn-logout').onclick = () => {
+        localStorage.removeItem('token');
+        $('login-status').className = 'muted';
+        $('login-status').textContent = 'Logged out (token cleared)';
+        showToken();
+      };
+
+      $('btn-copy').onclick = async () => {
+        const token = localStorage.getItem('token');
+        if (!token) return;
+        try {
+          await navigator.clipboard.writeText(token);
+          alert('Token copied to clipboard');
+        } catch {}
+      };
+
+      showToken();
     </script>
   </body>
 </html>
