@@ -6,7 +6,8 @@
     <title>Auth Demo</title>
     <style>
       body { font-family: system-ui, Arial, sans-serif; margin: 2rem; }
-      .card { max-width: 500px; padding: 1rem; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1rem; }
+      .card { max-width: 450px; padding: 1rem; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1rem; }
+      .container { display: flex; flex-wrap: wrap; gap: 1rem; justify-content: space-around; }
       label { display:block; margin-top: .5rem; }
       input { width:100%; padding:.5rem; margin-top:.25rem; }
       button { margin-top: .75rem; padding:.5rem .75rem; }
@@ -18,8 +19,9 @@
     </style>
   </head>
   <body>
-    <h1>Register / Login</h1>
+    <h1>Auth Demo</h1>
 
+    <div class="container">
     <!-- Register -->
     <div class="card">
       <h2>Register</h2>
@@ -53,20 +55,32 @@
 
     <!-- Token -->
     <div class="card">
-      <h2>Stored Token</h2>
+      <h2>Stored Access Token</h2>
       <div class="row">
-        <button id="btn-copy" type="button">Copy</button>
+        <button id="btn-copy-access" type="button">Copy Access Token</button>
         <span class="muted">Saved to localStorage after login</span>
       </div>
-      <pre id="token-box"></pre>
+      <pre id="access-token-box"></pre>
+    </div>
+
+    <div class="card">
+      <h2>Stored Refresh Token</h2>
+      <div class="row">
+        <button id="btn-copy-refresh" type="button">Copy Refresh Token</button>
+        <span class="muted">Saved to localStorage after login</span>
+      </div>
+      <pre id="refresh-token-box"></pre>
+    </div>
     </div>
 
     <script>
       const $ = (id) => document.getElementById(id);
 
-      const showToken = () => {
-        const token = localStorage.getItem('token') || '';
-        $('token-box').textContent = token ? token : '(no token)';
+      const showTokens = () => {
+        const accessToken = localStorage.getItem('accessToken') || '';
+        const refreshToken = localStorage.getItem('refreshToken') || '';
+        $('access-token-box').textContent = accessToken ? accessToken : '(no access token)';
+        $('refresh-token-box').textContent = refreshToken ? refreshToken : '(no refresh token)';
       };
 
       const setBusy = (el, busy) => {
@@ -74,10 +88,15 @@
         el.textContent = busy ? (el.dataset.busyText || 'Working...') : (el.dataset.idleText || el.textContent);
       };
 
-      const api = async (path, body) => {
+      const api = async (path, body, method = 'POST') => {
+        const headers = { 'Content-Type': 'application/json' };
+        const accessToken = localStorage.getItem('accessToken');
+        if (accessToken) {
+          headers['Authorization'] = `Bearer ${accessToken}`;
+        }
         const res = await fetch(path, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          method,
+          headers,
           body: JSON.stringify(body)
         });
         const data = await res.json().catch(() => ({}));
@@ -121,6 +140,9 @@
           $('reg-status').className = 'ok';
           $('reg-status').textContent = 'Registered successfully';
           $('reg-result').textContent = JSON.stringify(res, null, 2);
+          localStorage.removeItem('accessToken');
+          localStorage.removeItem('refreshToken');
+          showTokens();
         } catch (e) {
           $('reg-status').className = 'err';
           $('reg-status').textContent = e.message || 'Registration failed';
@@ -129,8 +151,7 @@
         }
       };
 
-      // Login with email + password
-      $('btn-login').onclick = async () => {
+      const handleLogin = async () => {
         const email = $('login-email').value.trim();
         const password = $('login-password').value;
 
@@ -150,33 +171,65 @@
           $('login-status').className = 'ok';
           $('login-status').textContent = 'Logged in';
           $('login-result').textContent = JSON.stringify(res, null, 2);
-          if (res.token) localStorage.setItem('token', res.token);
-          showToken();
+          localStorage.setItem('accessToken', res.accessToken);
+          localStorage.setItem('refreshToken', res.refreshToken);
+          showTokens();
         } catch (e) {
           $('login-status').className = 'err';
           $('login-status').textContent = e.message || 'Login failed';
+          if (e.message.includes("already in use") && confirm("Another session is active. Do you want to force logout?")) {
+            try {
+              await api('/api/auth/force-logout', { email });
+              $('login-status').className = 'ok';
+              $('login-status').textContent = 'Previous session logged out. Please try logging in again.';
+            } catch (forceLogoutErr) {
+              $('login-status').className = 'err';
+              $('login-status').textContent = forceLogoutErr.message || 'Force logout failed.';
+            }
+          }
         } finally {
           setBusy($('btn-login'), false);
         }
       };
 
-      $('btn-logout').onclick = () => {
-        localStorage.removeItem('token');
-        $('login-status').className = 'muted';
-        $('login-status').textContent = 'Logged out (token cleared)';
-        showToken();
+      $('btn-login').onclick = handleLogin;
+
+      $('btn-logout').onclick = async () => {
+        setBusy($('btn-logout'), true);
+        try {
+          await api('/api/auth/logout', {});
+          localStorage.removeItem('accessToken');
+          localStorage.removeItem('refreshToken');
+          $('login-status').className = 'muted';
+          $('login-status').textContent = 'Logged out (tokens cleared)';
+          showTokens();
+        } catch (e) {
+          $('login-status').className = 'err';
+          $('login-status').textContent = e.message || 'Logout failed';
+        } finally {
+          setBusy($('btn-logout'), false);
+        }
       };
 
-      $('btn-copy').onclick = async () => {
-        const token = localStorage.getItem('token');
-        if (!token) return;
+      $('btn-copy-access').onclick = async () => {
+        const accessToken = localStorage.getItem('accessToken');
+        if (!accessToken) return;
         try {
-          await navigator.clipboard.writeText(token);
-          alert('Token copied to clipboard');
+          await navigator.clipboard.writeText(accessToken);
+          alert('Access Token copied to clipboard');
         } catch {}
       };
 
-      showToken();
+      $('btn-copy-refresh').onclick = async () => {
+        const refreshToken = localStorage.getItem('refreshToken');
+        if (!refreshToken) return;
+        try {
+          await navigator.clipboard.writeText(refreshToken);
+          alert('Refresh Token copied to clipboard');
+        } catch {}
+      };
+
+      showTokens();
     </script>
   </body>
 </html>

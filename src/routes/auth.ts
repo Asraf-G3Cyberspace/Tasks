@@ -11,7 +11,7 @@ const router = Router();
 
 declare module "express-serve-static-core" {
   interface Request {
-    user?: { id: number; username: string; email: string };
+    user?: { id: number; username: string; email: string; is_logged_in: boolean };
   }
 }
 
@@ -24,12 +24,27 @@ export const authenticateToken = (req: Request, res: Response, next: NextFunctio
     return res.status(401).json({ message: "Authentication token required" });
   }
 
-  jwt.verify(token, process.env.JWT_SECRET as string, (err: any, user: any) => {
+  jwt.verify(token, process.env.JWT_SECRET as string, async (err: any, decoded: any) => {
     if (err) {
       return res.status(403).json({ message: "Invalid or expired token" });
     }
-    req.user = user as { id: number; username: string; email: string };
-    next();
+
+    try {
+      const userResult = await pool.query(
+        "SELECT id, username, email, access_token_expires_at, is_logged_in FROM users WHERE id = $1 AND access_token = $2 AND access_token_expires_at > NOW()",
+        [decoded.id, token]
+      );
+
+      if (userResult.rows.length === 0) {
+        return res.status(403).json({ message: "Invalid or expired token" });
+      }
+      const user = userResult.rows[0];
+      req.user = user as { id: number; username: string; email: string; is_logged_in: boolean };
+      next();
+    } catch (dbErr) {
+      console.error((dbErr as Error).message);
+      return res.status(500).send("Server error");
+    }
   });
 };
 
@@ -64,23 +79,7 @@ router.post("/register", async (req: Request, res: Response) => {
       [username, email, hashedPassword, first_name || null, last_name || null, phone_number || null, date_of_birth || null]
     );
 
-    const accessToken = jwt.sign(
-      { id: newUser.rows[0].id, username, email },
-      process.env.JWT_SECRET as string,
-      { expiresIn: "15m" }
-    );
-
-    const refreshToken = uuidv4();
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
-    const deviceInfo = req.headers["user-agent"];
-    const ipAddress = req.ip;
-
-    await pool.query(
-      "INSERT INTO user_sessions (user_id, refresh_token, device_info, ip_address, expires_at) VALUES ($1, $2, $3, $4, $5)",
-      [newUser.rows[0].id, refreshToken, deviceInfo, ipAddress, expiresAt]
-    );
-
-    return res.status(201).json({ message: "User registered successfully", accessToken, refreshToken });
+    return res.status(201).json({ message: "User registered successfully" });
   } catch (err) {
     console.error((err as Error).message);
     return res.status(500).send("Server error");
@@ -110,6 +109,7 @@ router.post("/login", async (req: Request, res: Response) => {
       username: string;
       email: string;
       password: string;
+      is_logged_in: boolean;
     };
 
     const validPassword = await bcrypt.compare(password, user.password);
@@ -117,26 +117,52 @@ router.post("/login", async (req: Request, res: Response) => {
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
+    if (user.is_logged_in) {
+      return res.status(409).json({
+        message: "This account is already in use. Do you want to log out the other session?",
+        action: "force_logout",
+      });
+    }
+
     const accessToken = jwt.sign(
       { id: user.id, username: user.username, email: user.email },
       process.env.JWT_SECRET as string,
-      { expiresIn: "15m" }
+      { expiresIn: "5m" }
     );
 
     const refreshToken = uuidv4();
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
-    const deviceInfo = req.headers["user-agent"];
-    const ipAddress = req.ip;
+    const accessTokenExpiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+    const refreshTokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
 
     await pool.query(
-      "INSERT INTO user_sessions (user_id, refresh_token, device_info, ip_address, expires_at) VALUES ($1, $2, $3, $4, $5)",
-      [user.id, refreshToken, deviceInfo, ipAddress, expiresAt]
+      `UPDATE users 
+       SET access_token = $1, access_token_expires_at = $2, refresh_token = $3, refresh_token_expires_at = $4, is_logged_in = TRUE, last_login = NOW()
+       WHERE id = $5`,
+      [accessToken, accessTokenExpiresAt, refreshToken, refreshTokenExpiresAt, user.id]
     );
 
-    // update last_login
-    await pool.query("UPDATE users SET last_login = NOW() WHERE id = $1", [user.id]);
-
     return res.json({ accessToken, refreshToken });
+  } catch (err) {
+    console.error((err as Error).message);
+    return res.status(500).send("Server error");
+  }
+});
+
+router.post("/force-logout", async (req: Request, res: Response) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ message: "Email is required" });
+  }
+
+  try {
+    await pool.query(
+      `UPDATE users 
+       SET access_token = NULL, access_token_expires_at = NULL, refresh_token = NULL, refresh_token_expires_at = NULL, is_logged_in = FALSE 
+       WHERE email = $1`,
+      [email]
+    );
+    return res.status(200).json({ message: "Previous session logged out successfully" });
   } catch (err) {
     console.error((err as Error).message);
     return res.status(500).send("Server error");
@@ -155,7 +181,7 @@ router.post("/refresh-token", async (req: Request, res: Response) => {
 
   try {
     const result = await pool.query(
-      "SELECT * FROM user_sessions WHERE refresh_token = $1 AND expires_at > NOW()",
+      "SELECT id, username, email, refresh_token_expires_at FROM users WHERE refresh_token = $1 AND refresh_token_expires_at > NOW()",
       [refreshToken]
     );
 
@@ -163,31 +189,49 @@ router.post("/refresh-token", async (req: Request, res: Response) => {
       return res.status(403).json({ message: "Invalid or expired refresh token" });
     }
 
-    const session = result.rows[0];
-
-    // Fetch user details to create a new access token
-    const userResult = await pool.query("SELECT id, username, email FROM users WHERE id = $1", [session.user_id]);
-    if (userResult.rows.length === 0) {
-      return res.status(404).json({ message: "User not found" });
-    }
-    const user = userResult.rows[0];
+    const user = result.rows[0];
 
     const newAccessToken = jwt.sign(
       { id: user.id, username: user.username, email: user.email },
       process.env.JWT_SECRET as string,
-      { expiresIn: "15m" }
+      { expiresIn: "5m" }
     );
 
-    // Optionally, rotate refresh token (issue a new one and invalidate the old one)
     const newRefreshToken = uuidv4();
-    const newExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    const newAccessTokenExpiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+    const newRefreshTokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
 
     await pool.query(
-      "UPDATE user_sessions SET refresh_token = $1, expires_at = $2 WHERE id = $3",
-      [newRefreshToken, newExpiresAt, session.id]
+      `UPDATE users 
+       SET access_token = $1, access_token_expires_at = $2, refresh_token = $3, refresh_token_expires_at = $4 
+       WHERE id = $5`,
+      [newAccessToken, newAccessTokenExpiresAt, newRefreshToken, newRefreshTokenExpiresAt, user.id]
     );
 
     return res.json({ accessToken: newAccessToken, refreshToken: newRefreshToken });
+  } catch (err) {
+    console.error((err as Error).message);
+    return res.status(500).send("Server error");
+  }
+});
+
+/**
+ * User Logout
+ */
+router.post("/logout", authenticateToken, async (req: Request, res: Response) => {
+  try {
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ message: "User not authenticated" });
+    }
+
+    await pool.query(
+      `UPDATE users 
+       SET access_token = NULL, access_token_expires_at = NULL, refresh_token = NULL, refresh_token_expires_at = NULL, is_logged_in = FALSE 
+       WHERE id = $1`,
+      [req.user.id]
+    );
+
+    return res.status(200).json({ message: "Logged out successfully" });
   } catch (err) {
     console.error((err as Error).message);
     return res.status(500).send("Server error");
