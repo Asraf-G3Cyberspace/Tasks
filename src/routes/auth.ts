@@ -238,4 +238,59 @@ router.post("/logout", authenticateToken, async (req: Request, res: Response) =>
   }
 });
 
+router.get("/test-protected", authenticateToken, (req: Request, res: Response) => {
+  if (req.user) {
+    return res.status(200).json({ message: `Welcome, ${req.user.username}! You have access to protected data.` });
+  }
+  return res.status(401).json({ message: "User not authenticated." });
+});
+
+router.get("/profile", authenticateToken, async (req: Request, res: Response) => {
+  try {
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ message: "User not authenticated." });
+    }
+
+    const userResult = await pool.query(
+      "SELECT id, username, email, first_name, last_name, phone_number, date_of_birth FROM users WHERE id = $1",
+      [req.user.id]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ message: "User not found." });
+    }
+
+    const userProfile = userResult.rows[0];
+    return res.status(200).json(userProfile);
+  } catch (err) {
+    console.error((err as Error).message);
+    return res.status(500).send("Server error");
+  }
+});
+
+router.post("/update-profile", authenticateToken, async (req: Request, res: Response) => {
+  try {
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ message: "User not authenticated." });
+    }
+
+    const { first_name, last_name, phone_number, date_of_birth } = req.body;
+
+    await pool.query(
+      `UPDATE users 
+       SET first_name = COALESCE($1, first_name), 
+           last_name = COALESCE($2, last_name), 
+           phone_number = COALESCE($3, phone_number), 
+           date_of_birth = COALESCE($4, date_of_birth)
+       WHERE id = $5`,
+      [first_name || null, last_name || null, phone_number || null, date_of_birth || null, req.user.id]
+    );
+
+    return res.status(200).json({ message: "Profile updated successfully." });
+  } catch (err) {
+    console.error((err as Error).message);
+    return res.status(500).send("Server error");
+  }
+});
+
 export default router;
