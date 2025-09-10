@@ -56,9 +56,19 @@ export async function api(path, options = {}) {
 export const AuthApi = {
   register: (body) => api("/register", { method: "POST", body, auth: false }),
   login: (body) => api("/login", { method: "POST", body, auth: false }),
-  forceLogout: (email) => api("/force-logout", { method: "POST", body: { email }, auth: false }),
+  confirmLogoutLogin: (body) => api("/confirm-logout-login", { method: "POST", body, auth: false }),
   logout: () => api("/logout", { method: "POST" }),
   profile: () => api("/profile"),
   updateProfile: (body) => api("/update-profile", { method: "POST", body }),
   testProtected: () => api("/test-protected"),
+  
+  // User Management CRUD operations
+  getUsers: (params = {}) => {
+    const queryString = new URLSearchParams(params).toString();
+    return api(`/users${queryString ? `?${queryString}` : ''}`);
+  },
+  getUser: (id) => api(`/users/${id}`),
+  createUser: (body) => api("/users", { method: "POST", body }),
+  updateUser: (id, body) => api(`/users/${id}`, { method: "PUT", body }),
+  deleteUser: (id) => api(`/users/${id}`, { method: "DELETE" }),
 };

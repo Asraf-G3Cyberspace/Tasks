@@ -11,7 +11,8 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, "../../frontend/build")));
 
 // Routes
-import authRoutes, { authenticateToken } from "./routes/auth";
+import authRoutes from "./routes/auth";
+import { authenticateToken } from "./middleware/auth";
 app.use("/api/auth", authRoutes);
 
 // Example of a protected route (already exists, but good to keep in mind for API calls)
